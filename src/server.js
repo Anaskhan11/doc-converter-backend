@@ -12,7 +12,7 @@ ensureDirectoriesExist(env.uploadDir, env.convertedDir);
 
 app.use(
   cors({
-    origin: env.frontendUrl,
+    origin: '*',
     credentials: true,
     exposedHeaders: ['Content-Disposition']
   })
@@ -27,7 +27,7 @@ app.use('/api', conversionRoutes);
 app.use(errorHandler);
 
 const startServer = () => {
-  app.listen(env.port, () => {
+  app.listen(env.port,"0.0.0.0", () => {
     console.log(`DocConvert Backend running on port ${env.port}`);
   });
 };
