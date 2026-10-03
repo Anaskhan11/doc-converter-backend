@@ -27,9 +27,28 @@ const { comparePdfs } = require('../services/pdfDiffService');
 const { convertPdfToText, convertPdfToMarkdown } = require('../services/textMarkdownService');
 const { deleteFileSilently } = require('../utils/fileUtils');
 
+/* A download name is user-supplied text, so it has to survive two things: the
+   quoted-string grammar (a `"` in the original filename used to terminate the
+   early and mangle the header) and non-ASCII bytes (which arrived as mojibake).
+   The plain `filename` keeps a folded ASCII fallback for old clients and the
+   RFC 5987 `filename*` carries the true name; 6266 says prefer the later one. */
+const dispositionName = (name) => {
+  const clean = String(name || 'document').replace(/["\\]/g, '').replace(/[\r\n]+/g, ' ');
+  const folded = clean
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^ -~]/g, '_')
+    .trim() || 'document';
+  const extValue = encodeURIComponent(clean).replace(
+    /[!'()*]/g,
+    (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`
+  );
+  return `attachment; filename="${folded}"; filename*=UTF-8''${extValue}`;
+};
+
 const sendFileAndCleanup = (res, outputPath, downloadName, contentType, inputFiles = [], next) => {
   res.setHeader('Content-Type', contentType);
-  res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`);
+  res.setHeader('Content-Disposition', dispositionName(downloadName));
   res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
 
   res.sendFile(outputPath, (err) => {
@@ -76,7 +95,7 @@ const convertPdfToJpgController = async (req, res, next) => {
   let outputPath = null;
   try {
     if (!inputPath) return res.status(400).json({ success: false, message: 'Please select a PDF file.' });
-    outputPath = await convertPdfToImages(inputPath, env.convertedDir, 'jpg');
+    outputPath = await convertPdfToImages(inputPath, env.convertedDir, 'jpg', req.file.originalname);
     const isZip = outputPath.endsWith('.zip');
     const downloadName = `${path.basename(req.file.originalname, '.pdf')}-jpg${isZip ? '.zip' : '.jpg'}`;
     sendFileAndCleanup(res, outputPath, downloadName, isZip ? 'application/zip' : 'image/jpeg', [inputPath], next);
@@ -92,7 +111,7 @@ const convertPdfToPngController = async (req, res, next) => {
   let outputPath = null;
   try {
     if (!inputPath) return res.status(400).json({ success: false, message: 'Please select a PDF file.' });
-    outputPath = await convertPdfToImages(inputPath, env.convertedDir, 'png');
+    outputPath = await convertPdfToImages(inputPath, env.convertedDir, 'png', req.file.originalname);
     const isZip = outputPath.endsWith('.zip');
     const downloadName = `${path.basename(req.file.originalname, '.pdf')}-png${isZip ? '.zip' : '.png'}`;
     sendFileAndCleanup(res, outputPath, downloadName, isZip ? 'application/zip' : 'image/png', [inputPath], next);
@@ -108,7 +127,7 @@ const convertJpgToPdfController = async (req, res, next) => {
   let outputPath = null;
   try {
     if (inputFiles.length === 0) return res.status(400).json({ success: false, message: 'Please select JPG images.' });
-    outputPath = await convertImagesToPdf(inputFiles, env.convertedDir);
+    outputPath = await convertImagesToPdf(inputFiles, env.convertedDir, req.files.map((f) => f.originalname));
     sendFileAndCleanup(res, outputPath, 'images-converted.pdf', 'application/pdf', inputFiles, next);
   } catch (err) {
     inputFiles.forEach((f) => deleteFileSilently(f));
@@ -122,7 +141,7 @@ const convertPngToPdfController = async (req, res, next) => {
   let outputPath = null;
   try {
     if (inputFiles.length === 0) return res.status(400).json({ success: false, message: 'Please select PNG images.' });
-    outputPath = await convertImagesToPdf(inputFiles, env.convertedDir);
+    outputPath = await convertImagesToPdf(inputFiles, env.convertedDir, req.files.map((f) => f.originalname));
     sendFileAndCleanup(res, outputPath, 'images-converted.pdf', 'application/pdf', inputFiles, next);
   } catch (err) {
     inputFiles.forEach((f) => deleteFileSilently(f));
@@ -135,7 +154,13 @@ const mergePdfController = async (req, res, next) => {
   const inputFiles = req.files ? req.files.map((f) => f.path) : [];
   let outputPath = null;
   try {
-    if (inputFiles.length < 2) return res.status(400).json({ success: false, message: 'Please select at least 2 PDF files to merge.' });
+    if (inputFiles.length < 2) {
+      // multer has already written the upload, and returning from inside the try
+      // skips the cleanup in the catch below, so a one-file merge attempt stranded
+      // that upload in uploads/ forever.
+      inputFiles.forEach((f) => deleteFileSilently(f));
+      return res.status(400).json({ success: false, message: 'Please select at least 2 PDF files to merge.' });
+    }
     outputPath = await mergePdfs(inputFiles, env.convertedDir);
     sendFileAndCleanup(res, outputPath, 'merged-document.pdf', 'application/pdf', inputFiles, next);
   } catch (err) {
@@ -150,7 +175,7 @@ const splitPdfController = async (req, res, next) => {
   let outputPath = null;
   try {
     if (!inputPath) return res.status(400).json({ success: false, message: 'Please select a PDF file.' });
-    outputPath = await splitPdf(inputPath, env.convertedDir, req.body.pagesRange || '');
+    outputPath = await splitPdf(inputPath, env.convertedDir, req.body.pagesRange || '', req.file.originalname);
     const isZip = outputPath.endsWith('.zip');
     const downloadName = `${path.basename(req.file.originalname, '.pdf')}-split${isZip ? '.zip' : '.pdf'}`;
     sendFileAndCleanup(res, outputPath, downloadName, isZip ? 'application/zip' : 'application/pdf', [inputPath], next);
@@ -181,7 +206,7 @@ const rotatePdfController = async (req, res, next) => {
   let outputPath = null;
   try {
     if (!inputPath) return res.status(400).json({ success: false, message: 'Please select a PDF file.' });
-    outputPath = await rotatePdf(inputPath, env.convertedDir, req.body.angle || 90);
+    outputPath = await rotatePdf(inputPath, env.convertedDir, req.body.angle);
     const downloadName = `${path.basename(req.file.originalname, '.pdf')}-rotated.pdf`;
     sendFileAndCleanup(res, outputPath, downloadName, 'application/pdf', [inputPath], next);
   } catch (err) {
@@ -211,7 +236,7 @@ const convertExcelToPdfController = async (req, res, next) => {
   let outputPath = null;
   try {
     if (!inputPath) return res.status(400).json({ success: false, message: 'Please select an Excel file.' });
-    outputPath = await convertExcelToPdf(inputPath, env.convertedDir);
+    outputPath = await convertExcelToPdf(inputPath, env.convertedDir, req.file.originalname);
     const downloadName = `${path.basename(req.file.originalname, path.extname(req.file.originalname))}.pdf`;
     sendFileAndCleanup(res, outputPath, downloadName, 'application/pdf', [inputPath], next);
   } catch (err) {
@@ -346,7 +371,7 @@ const ocrPdfController = async (req, res, next) => {
   let outputPath = null;
   try {
     if (!inputPath) return res.status(400).json({ success: false, message: 'Please select a PDF file.' });
-    outputPath = await performOcrOnPdf(inputPath, env.convertedDir);
+    outputPath = await performOcrOnPdf(inputPath);
     const downloadName = `${path.basename(req.file.originalname, '.pdf')}-ocr.pdf`;
     sendFileAndCleanup(res, outputPath, downloadName, 'application/pdf', [inputPath], next);
   } catch (err) {
@@ -480,7 +505,7 @@ const convertPdfToMarkdownController = async (req, res, next) => {
   let outputPath = null;
   try {
     if (!inputPath) return res.status(400).json({ success: false, message: 'Please select a PDF file.' });
-    outputPath = await convertPdfToMarkdown(inputPath, env.convertedDir);
+    outputPath = await convertPdfToMarkdown(inputPath, env.convertedDir, req.file.originalname);
     const downloadName = `${path.basename(req.file.originalname, '.pdf')}.md`;
     sendFileAndCleanup(res, outputPath, downloadName, 'text/markdown', [inputPath], next);
   } catch (err) {

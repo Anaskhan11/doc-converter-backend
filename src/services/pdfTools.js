@@ -2,13 +2,17 @@ const fs = require('fs');
 const path = require('path');
 const { PDFDocument, degrees } = require('pdf-lib');
 const archiver = require('archiver');
+const { parseNumericOption } = require('../utils/optionParser');
+const { parsePageList } = require('../utils/pageRangeParser');
+const { displayTitleOf } = require('../utils/fileUtils');
+const { loadPdf } = require('./pdfExtraction');
 
 const mergePdfs = async (inputPaths, outputDir) => {
   const mergedPdf = await PDFDocument.create();
 
   for (const inputPath of inputPaths) {
     const pdfBytes = await fs.promises.readFile(inputPath);
-    const pdf = await PDFDocument.load(pdfBytes);
+    const pdf = await loadPdf(pdfBytes);
     const copiedPages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
     copiedPages.forEach((page) => mergedPdf.addPage(page));
   }
@@ -19,12 +23,17 @@ const mergePdfs = async (inputPaths, outputDir) => {
   return outputPath;
 };
 
-const rotatePdf = async (inputPath, outputDir, angle = 90) => {
+const rotatePdf = async (inputPath, outputDir, angle) => {
   const pdfBytes = await fs.promises.readFile(inputPath);
-  const pdfDoc = await PDFDocument.load(pdfBytes);
+  const pdfDoc = await loadPdf(pdfBytes);
 
   const pages = pdfDoc.getPages();
-  const rotationAngle = parseInt(angle, 10) || 90;
+  const rotationAngle = parseNumericOption(angle, {
+    name: 'Rotation angle',
+    def: 90,
+    integer: true,
+    multipleOf: 90
+  });
 
   pages.forEach((page) => {
     const currentRotation = page.getRotation().angle;
@@ -40,7 +49,7 @@ const rotatePdf = async (inputPath, outputDir, angle = 90) => {
 
 const compressPdf = async (inputPath, outputDir) => {
   const pdfBytes = await fs.promises.readFile(inputPath);
-  const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+  const pdfDoc = await loadPdf(pdfBytes);
 
   const compressedPdfBytes = await pdfDoc.save({ useObjectStreams: true });
   const baseName = path.basename(inputPath, path.extname(inputPath));
@@ -49,25 +58,18 @@ const compressPdf = async (inputPath, outputDir) => {
   return outputPath;
 };
 
-const splitPdf = async (inputPath, outputDir, pagesRangeStr = '') => {
+const splitPdf = async (inputPath, outputDir, pagesRangeStr = '', originalName) => {
   const pdfBytes = await fs.promises.readFile(inputPath);
-  const pdfDoc = await PDFDocument.load(pdfBytes);
+  const pdfDoc = await loadPdf(pdfBytes);
   const totalPages = pdfDoc.getPageCount();
 
-  let targetIndices = [];
-  if (pagesRangeStr && pagesRangeStr.trim().length > 0) {
-    targetIndices = parsePageRanges(pagesRangeStr, totalPages);
-  } else {
-    for (let i = 0; i < totalPages; i++) {
-      targetIndices.push(i);
-    }
-  }
-
-  if (targetIndices.length === 0) {
-    throw new Error('Invalid page range specified.');
-  }
+  const targetIndices = parsePageList(pagesRangeStr, totalPages, {
+    name: 'the pages to split',
+    onEmpty: 'all'
+  });
 
   const baseName = path.basename(inputPath, path.extname(inputPath));
+  const entryName = displayTitleOf(originalName);
 
   if (targetIndices.length === 1) {
     const newPdf = await PDFDocument.create();
@@ -93,35 +95,11 @@ const splitPdf = async (inputPath, outputDir, pagesRangeStr = '') => {
       const [copiedPage] = await singlePdf.copyPages(pdfDoc, [index]);
       singlePdf.addPage(copiedPage);
       const bytes = await singlePdf.save();
-      archive.append(Buffer.from(bytes), { name: `${baseName}-page-${index + 1}.pdf` });
+      archive.append(Buffer.from(bytes), { name: `${entryName}-page-${index + 1}.pdf` });
     }
 
     archive.finalize();
   });
-};
-
-const parsePageRanges = (rangeStr, totalPages) => {
-  const indices = new Set();
-  const parts = rangeStr.split(',');
-
-  parts.forEach((part) => {
-    const p = part.trim();
-    if (p.includes('-')) {
-      const [startStr, endStr] = p.split('-');
-      const start = Math.max(1, parseInt(startStr, 10) || 1);
-      const end = Math.min(totalPages, parseInt(endStr, 10) || totalPages);
-      for (let i = start; i <= end; i++) {
-        indices.add(i - 1);
-      }
-    } else {
-      const num = parseInt(p, 10);
-      if (num >= 1 && num <= totalPages) {
-        indices.add(num - 1);
-      }
-    }
-  });
-
-  return Array.from(indices).sort((a, b) => a - b);
 };
 
 module.exports = {

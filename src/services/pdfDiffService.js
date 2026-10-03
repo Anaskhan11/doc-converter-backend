@@ -1,6 +1,6 @@
 const path = require('path');
 const fs = require('fs');
-const pdfParse = require('pdf-parse');
+const { extractPdfText: pdfParse, PdfExtractionError } = require('./pdfExtraction');
 const PDFDocument = require('pdfkit');
 const Diff = require('diff');
 
@@ -42,7 +42,11 @@ const comparePdfs = async (inputPath1, inputPath2, outputDir) => {
 
         const lines = part.value.split(/\r?\n/).filter((l) => l.length > 0);
         lines.forEach((line) => {
-          doc.text(`${prefix}${line.substring(0, 100)}`, { lineGap: 2 });
+          // Was line.substring(0, 100): any changed line longer than 100
+          // characters lost its tail silently, so the "difference report"
+          // omitted the very text it existed to show. pdfkit wraps to the page
+          // width, so the cap was never needed to keep output on-page.
+          doc.text(`${prefix}${line}`, { lineGap: 2 });
         });
       });
 
@@ -53,7 +57,7 @@ const comparePdfs = async (inputPath1, inputPath2, outputDir) => {
     });
   } catch (err) {
     console.error('PDF Compare Service Error:', err.message);
-    throw new Error('Failed to compare PDF documents.');
+    throw err instanceof PdfExtractionError ? err : new Error('Failed to compare PDF documents.');
   }
 };
 

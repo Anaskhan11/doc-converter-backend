@@ -1,40 +1,22 @@
 const fs = require('fs');
 const path = require('path');
 const { PDFDocument, rgb, degrees, StandardFonts } = require('pdf-lib');
+const { parseNumericOption, badRequest } = require('../utils/optionParser');
+const { parsePageList } = require('../utils/pageRangeParser');
+const { loadPdf } = require('./pdfExtraction');
 
-const parseIndices = (str, totalPages) => {
-  const indices = [];
-  if (!str || !str.trim()) return indices;
-
-  const parts = str.split(',');
-  parts.forEach((part) => {
-    const p = part.trim();
-    if (p.includes('-')) {
-      const [startStr, endStr] = p.split('-');
-      const start = Math.max(1, parseInt(startStr, 10) || 1);
-      const end = Math.min(totalPages, parseInt(endStr, 10) || totalPages);
-      for (let i = start; i <= end; i++) {
-        indices.push(i - 1);
-      }
-    } else {
-      const num = parseInt(p, 10);
-      if (num >= 1 && num <= totalPages) {
-        indices.push(num - 1);
-      }
-    }
-  });
-  return indices;
+const reorderHint = (totalPages) => {
+  const reverseExample = [];
+  for (let i = totalPages; i >= 1; i--) reverseExample.push(i);
+  return `List all ${totalPages} page${totalPages === 1 ? '' : 's'} exactly once, in the order you want them (e.g. ${reverseExample.join(', ')}).`;
 };
 
 const extractPdfPages = async (inputPath, outputDir, pagesRangeStr) => {
   const pdfBytes = await fs.promises.readFile(inputPath);
-  const pdfDoc = await PDFDocument.load(pdfBytes);
+  const pdfDoc = await loadPdf(pdfBytes);
   const totalPages = pdfDoc.getPageCount();
 
-  let indices = parseIndices(pagesRangeStr, totalPages);
-  if (indices.length === 0) {
-    for (let i = 0; i < totalPages; i++) indices.push(i);
-  }
+  const indices = parsePageList(pagesRangeStr, totalPages, { name: 'the pages to extract' });
 
   const newPdf = await PDFDocument.create();
   const copiedPages = await newPdf.copyPages(pdfDoc, indices);
@@ -49,10 +31,10 @@ const extractPdfPages = async (inputPath, outputDir, pagesRangeStr) => {
 
 const deletePdfPages = async (inputPath, outputDir, pagesToDeleteStr) => {
   const pdfBytes = await fs.promises.readFile(inputPath);
-  const pdfDoc = await PDFDocument.load(pdfBytes);
+  const pdfDoc = await loadPdf(pdfBytes);
   const totalPages = pdfDoc.getPageCount();
 
-  const deleteSet = new Set(parseIndices(pagesToDeleteStr, totalPages));
+  const deleteSet = new Set(parsePageList(pagesToDeleteStr, totalPages, { name: 'the pages to delete' }));
   const keepIndices = [];
   for (let i = 0; i < totalPages; i++) {
     if (!deleteSet.has(i)) {
@@ -61,7 +43,7 @@ const deletePdfPages = async (inputPath, outputDir, pagesToDeleteStr) => {
   }
 
   if (keepIndices.length === 0) {
-    throw new Error('Cannot delete all pages. At least one page must remain.');
+    throw badRequest('That would delete every page, leaving an empty document. Leave at least one page out of the list.');
   }
 
   const newPdf = await PDFDocument.create();
@@ -75,15 +57,29 @@ const deletePdfPages = async (inputPath, outputDir, pagesToDeleteStr) => {
   return outputPath;
 };
 
+// Reordering rewrites the whole document, so a page left out of the list is
+// deleted with no warning. The shared parser already rejects unreadable tokens,
+// out-of-bounds pages and duplicates, so all that is left to check is that every
+// page is named exactly once.
+const validateReorderIndices = (indices, totalPages) => {
+  const missing = [];
+  for (let i = 0; i < totalPages; i++) {
+    if (!indices.includes(i)) missing.push(i + 1);
+  }
+  if (missing.length > 0) {
+    throw badRequest(
+      `Page${missing.length > 1 ? 's' : ''} ${missing.join(', ')} ${missing.length > 1 ? 'are' : 'is'} missing from the order, so ${missing.length > 1 ? 'they would be' : 'it would be'} deleted from the result. ${reorderHint(totalPages)}`
+    );
+  }
+};
+
 const reorderPdfPages = async (inputPath, outputDir, newOrderStr) => {
   const pdfBytes = await fs.promises.readFile(inputPath);
-  const pdfDoc = await PDFDocument.load(pdfBytes);
+  const pdfDoc = await loadPdf(pdfBytes);
   const totalPages = pdfDoc.getPageCount();
 
-  let indices = parseIndices(newOrderStr, totalPages);
-  if (indices.length === 0) {
-    throw new Error('Please specify a valid page order sequence (e.g., 3, 1, 2).');
-  }
+  const indices = parsePageList(newOrderStr, totalPages, { name: 'the new page order', hint: reorderHint(totalPages) });
+  validateReorderIndices(indices, totalPages);
 
   const newPdf = await PDFDocument.create();
   const copiedPages = await newPdf.copyPages(pdfDoc, indices);
@@ -96,14 +92,14 @@ const reorderPdfPages = async (inputPath, outputDir, newOrderStr) => {
   return outputPath;
 };
 
-const watermarkPdf = async (inputPath, outputDir, text = 'CONFIDENTIAL', opacityVal = 0.25) => {
+const watermarkPdf = async (inputPath, outputDir, text = 'CONFIDENTIAL', opacityVal) => {
   const pdfBytes = await fs.promises.readFile(inputPath);
-  const pdfDoc = await PDFDocument.load(pdfBytes);
+  const pdfDoc = await loadPdf(pdfBytes);
 
   const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   const pages = pdfDoc.getPages();
   const watermarkText = text && text.trim() ? text.trim() : 'CONFIDENTIAL';
-  const opacity = parseFloat(opacityVal) || 0.25;
+  const opacity = parseNumericOption(opacityVal, { name: 'Watermark opacity', def: 0.25, min: 0, max: 1 });
 
   pages.forEach((page) => {
     const { width, height } = page.getSize();
@@ -131,7 +127,7 @@ const watermarkPdf = async (inputPath, outputDir, text = 'CONFIDENTIAL', opacity
 
 const addPageNumbers = async (inputPath, outputDir) => {
   const pdfBytes = await fs.promises.readFile(inputPath);
-  const pdfDoc = await PDFDocument.load(pdfBytes);
+  const pdfDoc = await loadPdf(pdfBytes);
 
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const pages = pdfDoc.getPages();
@@ -159,20 +155,18 @@ const addPageNumbers = async (inputPath, outputDir) => {
   return outputPath;
 };
 
-const protectPdf = async (inputPath, outputDir, userPassword = 'password123') => {
-  const pdfBytes = await fs.promises.readFile(inputPath);
-  const pdfDoc = await PDFDocument.load(pdfBytes);
-
-  const password = userPassword && userPassword.trim() ? userPassword.trim() : 'password123';
-  const protectedBytes = await pdfDoc.save({
-    userPassword: password,
-    ownerPassword: password
-  });
-
-  const baseName = path.basename(inputPath, path.extname(inputPath));
-  const outputPath = path.join(outputDir, `${baseName}-protected.pdf`);
-  await fs.promises.writeFile(outputPath, protectedBytes);
-  return outputPath;
+// pdf-lib's save() accepts only {useObjectStreams, addDefaultPage, objectsPerPage,
+// objectsPerTick}; the userPassword/ownerPassword it used to be passed here were
+// ignored, so the endpoint wrote an UNENCRYPTED file and reported success. Real
+// encryption needs a real engine (qpdf/Ghostscript), neither of which is installed.
+// Until one is wired in, refuse instead of handing back a document the user
+// believes is password-protected.
+const protectPdf = async () => {
+  const err = new Error(
+    'Password protection is not available in this build, so your file was not changed. Encrypting a PDF needs an engine this server does not have (qpdf or Ghostscript).'
+  );
+  err.statusCode = 501;
+  throw err;
 };
 
 module.exports = {

@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs');
-const pdfParse = require('pdf-parse');
+const { extractPdfText: pdfParse, PdfExtractionError } = require('./pdfExtraction');
+const { noTextLayerError } = require('../utils/optionParser');
 const { Document, Packer, Paragraph, TextRun, PageBreak } = require('docx');
 const env = require('../config/env');
 
@@ -24,8 +25,12 @@ const convertLocally = async (inputPath, outputPath) => {
     const dataBuffer = await fs.promises.readFile(inputPath);
     const pdfData = await pdfParse(dataBuffer);
 
-    const rawText = pdfData.text || '';
-    const pages = rawText.split('\f');
+    const pages = pdfData.pages;
+
+    /* Every blank source line still pushes an empty Paragraph below, so
+       `children.length` can never be zero and a gate on it is dead code. The
+       honest question is whether the document yielded any text at all. */
+    if (pages.every((p) => !p || p.trim().length === 0)) throw noTextLayerError();
 
     const children = [];
 
@@ -56,16 +61,10 @@ const convertLocally = async (inputPath, outputPath) => {
     });
 
     if (children.length === 0) {
-      children.push(
-        new Paragraph({
-          children: [
-            new TextRun({
-              text: 'Document content extracted from PDF.',
-              size: 24
-            })
-          ]
-        })
-      );
+      // Unreachable in practice (blank lines push empty paragraphs) and replaced
+      // by the document-level gate above; kept as a last-resort refusal rather
+      // than the old paragraph claiming "Document content extracted from PDF."
+      throw noTextLayerError();
     }
 
     const doc = new Document({
@@ -82,8 +81,11 @@ const convertLocally = async (inputPath, outputPath) => {
 
     return outputPath;
   } catch (err) {
+    // Keep deliberate refusals intact: without this a badRequest thrown above is
+    // rewrapped into a generic 500 and the user never sees the real reason.
+    if (err && err.statusCode) throw err;
     console.error('Local PDF to Word conversion failed:', err.message);
-    throw new Error('Failed to convert PDF document to Word format.');
+    throw err instanceof PdfExtractionError ? err : new Error('Failed to convert PDF document to Word format.');
   }
 };
 

@@ -3,6 +3,7 @@ const fs = require('fs');
 const mammoth = require('mammoth');
 const PDFDocument = require('pdfkit');
 const env = require('../config/env');
+const { badRequest } = require('../utils/optionParser');
 const { runCommand, checkCommandExists } = require('../utils/commandUtils');
 
 const convertWordToPdf = async (inputPath, outputDir) => {
@@ -31,10 +32,18 @@ const convertLocally = async (inputPath, outputDir) => {
   const baseName = path.basename(inputPath, path.extname(inputPath));
   const expectedPdfPath = path.join(outputDir, `${baseName}.pdf`);
 
+  let rawText;
   try {
-    const result = await mammoth.extractRawText({ path: inputPath });
-    const rawText = result.value || '';
+    rawText = (await mammoth.extractRawText({ path: inputPath })).value || '';
+  } catch (err) {
+    // An upload this engine cannot read is a client-input problem, so it has to
+    // reach the user as a 400 sentence instead of a 500 "please try again".
+    // The write below keeps its 500: a failed write really is our fault.
+    console.error('Word document could not be read:', err.message);
+    throw badRequest('The Word document could not be read. It may be damaged, or it may not be a Word document at all.');
+  }
 
+  try {
     return new Promise((resolve, reject) => {
       const doc = new PDFDocument({ margin: 50 });
       const writeStream = fs.createWriteStream(expectedPdfPath);

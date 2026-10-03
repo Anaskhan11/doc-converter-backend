@@ -1,1 +1,7 @@
 node_modules
+
+# The live config file is per-deployment and is where the first real API key will
+# eventually be written; only the example template belongs in history.
+.env
+.env.local
+.env.*.local

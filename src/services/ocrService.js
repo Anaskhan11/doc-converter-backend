@@ -1,34 +1,31 @@
-const path = require('path');
 const fs = require('fs');
-const pdfParse = require('pdf-parse');
-const { PDFDocument } = require('pdf-lib');
-const Tesseract = require('tesseract.js');
+const { extractPdfText: pdfParse, PdfExtractionError } = require('./pdfExtraction');
 
-const performOcrOnPdf = async (inputPath, outputDir) => {
-  const baseName = path.basename(inputPath, path.extname(inputPath));
-  const outputPath = path.join(outputDir, `${baseName}-ocr.pdf`);
+// No input can be OCR'd here: reading a scanned page needs a PDF renderer this
+// server does not have. The text-bearing branch used to fall through to a
+// pdf-lib re-save and hand that back as a completed OCR, so a PDF that already
+// had selectable text got a byte-reshuffled copy of itself labelled "done" --
+// the same facade protect-pdf and powerpoint-to-pdf were ruled out of.
+const REFUSAL =
+  'Optical character recognition is not available in this build, so your file was not changed. Reading text out of a scanned page needs a PDF renderer this server does not have. If your PDF already has selectable text, use PDF to Text instead.';
 
+const performOcrOnPdf = async (inputPath) => {
   try {
     const dataBuffer = await fs.promises.readFile(inputPath);
-    const pdfData = await pdfParse(dataBuffer);
+    // Deliberately unused: extracting first is what keeps a damaged or non-PDF
+    // upload answering the 400 extraction message instead of this 501.
+    await pdfParse(dataBuffer);
 
-    let extractedText = pdfData.text || '';
-
-    if (!extractedText || extractedText.trim().length < 10) {
-      const worker = await Tesseract.createWorker('eng');
-      const ret = await worker.recognize(dataBuffer);
-      extractedText = ret.data.text || 'OCR process completed.';
-      await worker.terminate();
-    }
-
-    const pdfDoc = await PDFDocument.load(dataBuffer, { ignoreEncryption: true });
-    const pdfWithOcrBytes = await pdfDoc.save();
-    await fs.promises.writeFile(outputPath, pdfWithOcrBytes);
-
-    return outputPath;
+    const err = new Error(REFUSAL);
+    err.statusCode = 501;
+    throw err;
   } catch (err) {
     console.error('OCR PDF Service Error:', err.message);
-    throw new Error('OCR PDF processing failed.');
+    // An error that already carries a status is deliberate (the 501 refusal above, or a
+    // PdfExtractionError 400) and must reach the client intact; re-wrapping it here turned a
+    // specific refusal into a generic 500 "please try again".
+    if (err && err.statusCode) throw err;
+    throw err instanceof PdfExtractionError ? err : new Error('OCR PDF processing failed.');
   }
 };
 

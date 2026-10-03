@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const { PDFDocument } = require('pdf-lib');
+const { loadPdf } = require('./pdfExtraction');
 
 const repairPdf = async (inputPath, outputDir) => {
   const baseName = path.basename(inputPath, path.extname(inputPath));
@@ -8,10 +9,7 @@ const repairPdf = async (inputPath, outputDir) => {
 
   try {
     const dataBuffer = await fs.promises.readFile(inputPath);
-    const pdfDoc = await PDFDocument.load(dataBuffer, {
-      ignoreEncryption: true,
-      parseSpeed: 1
-    });
+    const pdfDoc = await loadPdf(dataBuffer, { parseSpeed: 1 });
 
     const repairedPdf = await PDFDocument.create();
     const pageIndices = pdfDoc.getPageIndices();
@@ -23,6 +21,7 @@ const repairPdf = async (inputPath, outputDir) => {
 
     return outputPath;
   } catch (err) {
+    if (err && err.statusCode) throw err;
     console.error('PDF Repair Service Error:', err.message);
     throw new Error('Failed to repair PDF document structure.');
   }

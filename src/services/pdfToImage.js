@@ -1,13 +1,15 @@
 const fs = require('fs');
 const path = require('path');
 const { PDFDocument } = require('pdf-lib');
-const pdfParse = require('pdf-parse');
+const { extractPdfText: pdfParse, PdfExtractionError } = require('./pdfExtraction');
 const sharp = require('sharp');
 const archiver = require('archiver');
+const { displayTitleOf } = require('../utils/fileUtils');
 
-const convertPdfToImages = async (inputPath, outputDir, format = 'jpg') => {
+const convertPdfToImages = async (inputPath, outputDir, format = 'jpg', originalName) => {
   const outputFormat = format.toLowerCase() === 'png' ? 'png' : 'jpg';
   const baseName = path.basename(inputPath, path.extname(inputPath));
+  const docTitle = displayTitleOf(originalName);
 
   try {
     const dataBuffer = await fs.promises.readFile(inputPath);
@@ -27,35 +29,36 @@ const convertPdfToImages = async (inputPath, outputDir, format = 'jpg') => {
     }
 
     const pageTexts = [];
-    try {
-      const options = {
-        pagerender: (pageData) => {
-          return pageData.getTextContent().then((textContent) => {
-            let lastY = null;
-            let text = '';
-            for (const item of textContent.items) {
-              if (lastY !== item.transform[5] && lastY !== null) {
-                text += '\n';
-              }
-              text += item.str + ' ';
-              lastY = item.transform[5];
+    const options = {
+      beforeAttempt: () => {
+        pageTexts.length = 0;
+      },
+      pagerender: (pageData) => {
+        return pageData.getTextContent().then((textContent) => {
+          let lastY = null;
+          let text = '';
+          for (const item of textContent.items) {
+            if (lastY !== item.transform[5] && lastY !== null) {
+              text += '\n';
             }
-            pageTexts.push(text);
-            return text;
-          });
-        }
-      };
-      await pdfParse(dataBuffer, options);
-    } catch (err) {
-      console.warn('pdf-parse text extraction skipped:', err.message);
-    }
+            text += item.str + ' ';
+            lastY = item.transform[5];
+          }
+          pageTexts.push(text);
+          return text;
+        });
+      }
+    };
+    // An extraction failure used to be warned about and skipped, which let the
+    // endpoint return a ZIP of textless images as a success. Let it propagate.
+    await pdfParse(dataBuffer, options);
 
     const generatedImages = [];
 
     for (let i = 0; i < totalPages; i++) {
       const pageText = pageTexts[i] || '';
       const dims = pageDimensions[i] || { width: 600, height: 800 };
-      const imageBuffer = await renderPageToImage(pageText, i + 1, totalPages, dims, outputFormat, baseName);
+      const imageBuffer = await renderPageToImage(pageText, i + 1, totalPages, dims, outputFormat, docTitle);
       generatedImages.push(imageBuffer);
     }
 
@@ -75,14 +78,14 @@ const convertPdfToImages = async (inputPath, outputDir, format = 'jpg') => {
       archive.pipe(outputStream);
 
       generatedImages.forEach((imgBuf, index) => {
-        archive.append(imgBuf, { name: `${baseName}-page-${index + 1}.${outputFormat}` });
+        archive.append(imgBuf, { name: `${docTitle}-page-${index + 1}.${outputFormat}` });
       });
 
       archive.finalize();
     });
   } catch (err) {
     console.error('PDF to image conversion error:', err.message);
-    throw new Error(`PDF to ${outputFormat.toUpperCase()} conversion failed.`);
+    throw err instanceof PdfExtractionError ? err : new Error(`PDF to ${outputFormat.toUpperCase()} conversion failed.`);
   }
 };
 
@@ -95,6 +98,28 @@ const escapeXml = (str) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
 
+// Wraps a line to roughly the canvas width at font-size 15. Used to replace the
+// old clip: nothing here throws text away, long lines continue on the next row.
+const wrapSvgLine = (line, maxChars) => {
+  const rows = [];
+  let current = '';
+  for (const word of line.split(/\s+/).filter(Boolean)) {
+    if (word.length > maxChars) {
+      if (current) { rows.push(current); current = ''; }
+      for (let i = 0; i < word.length; i += maxChars) rows.push(word.slice(i, i + maxChars));
+      continue;
+    }
+    if (current && `${current} ${word}`.length > maxChars) {
+      rows.push(current);
+      current = word;
+    } else {
+      current = current ? `${current} ${word}` : word;
+    }
+  }
+  if (current) rows.push(current);
+  return rows.length ? rows : [''];
+};
+
 const renderPageToImage = async (pageText, pageNum, totalPages, dims, format, docTitle) => {
   const lines = pageText
     .split(/\r?\n/)
@@ -102,13 +127,16 @@ const renderPageToImage = async (pageText, pageNum, totalPages, dims, format, do
     .filter((l) => l.length > 0);
 
   let textElements = '';
+  let renderedRows = 0;
 
   if (lines.length > 0) {
-    const displayLines = lines.slice(0, 35);
-    textElements = displayLines
+    const rows = [];
+    for (const line of lines) rows.push(...wrapSvgLine(line, 90));
+    renderedRows = rows.length;
+    textElements = rows
       .map((line, idx) => {
         const yPos = 80 + idx * 24;
-        const escaped = escapeXml(line.substring(0, 90));
+        const escaped = escapeXml(line);
         return `<text x="50" y="${yPos}" font-family="Arial, Helvetica, sans-serif" font-size="15" fill="#1e293b">${escaped}</text>`;
       })
       .join('\n');
@@ -121,7 +149,10 @@ const renderPageToImage = async (pageText, pageNum, totalPages, dims, format, do
   }
 
   const svgWidth = Math.max(800, dims.width || 800);
-  const svgHeight = Math.max(900, dims.height || 900);
+  // The canvas grows to hold every wrapped row; the previous fixed 900px height is
+  // what made a cap on the line count look harmless.
+  const neededHeight = renderedRows > 0 ? 80 + renderedRows * 24 + 40 : 900;
+  const svgHeight = Math.max(900, dims.height || 0, neededHeight);
 
   const svgString = `<svg width="${svgWidth}" height="${svgHeight}" xmlns="http://www.w3.org/2000/svg">
     <rect width="100%" height="100%" fill="#ffffff"/>
