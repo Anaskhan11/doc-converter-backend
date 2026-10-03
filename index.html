@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#090d16" />
+    <script>
+      // Tailwind resolves `dark:` from this class, so the pre-hydration document must
+      // carry the stored appearance: without it a light-theme user sees a dark first
+      // paint until ThemeContext's effect runs. The two metas need the same treatment,
+      // since `color-scheme: dark` paints native scrollbars and form controls dark.
+      (function () {
+        var dark = (localStorage.getItem('docconvert-theme') || 'dark') === 'dark';
+        document.documentElement.classList.toggle('dark', dark);
+        document.querySelector('meta[name="color-scheme"]').content = dark ? 'dark' : 'light';
+        document.querySelector('meta[name="theme-color"]').content = dark ? '#090d16' : '#f8fafc';
+      })();
+    </script>
+    <meta name="description" content="DocConvert converts, merges, splits, compresses and watermarks documents and PDFs in the browser." />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="DocConvert - Premium SaaS Document Tools Platform" />
+    <meta property="og:description" content="Convert, merge, split, compress, watermark, OCR and protect documents and PDFs in the browser." />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="DocConvert - Premium SaaS Document Tools Platform" />
+    <meta name="twitter:description" content="Convert, merge, split, compress, watermark, OCR and protect documents and PDFs in the browser." />
+    <title>DocConvert - Premium SaaS Document Tools Platform</title>
+  </head>
+  <!-- body is the page canvas and the overscroll strip, so it must follow the
+       appearance; text-slate-100 stays unpaired because the Home hero band keeps
+       a dark background in light mode and inherits this colour. -->
+  <body class="bg-slate-50 dark:bg-[#090d16] text-slate-100 font-sans antialiased selection:bg-[#6366f1] selection:text-white">
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

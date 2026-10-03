@@ -1,0 +1,108 @@
+@import "tailwindcss";
+
+/* Tailwind v4 resolves `dark:` from prefers-color-scheme unless told otherwise,
+   so ThemeContext's `.dark` class wrote a value nothing read. With this variant
+   the class on <html> is the single authority for appearance. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-brand: #0bff03;
+  --color-brand-hover: #09e602;
+  --color-brand-light: #eafd0320;
+}
+
+@layer base {
+  body {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  }
+
+  /* Components set focus:outline-none without replacing it, so Tab showed
+     nothing app-wide. Lime alone is 1.37:1 on white, so the inner dark band
+     carries the contrast on light surfaces and the lime band carries it on the
+     dark header/footer chrome. The band needs !important because Tailwind's
+     shadow-* utilities live in a later layer than this base rule and were
+     erasing it on the dropzone and every card link. */
+  :focus-visible {
+    outline: 2px solid #0bff03;
+    outline-offset: 2px;
+    box-shadow: 0 0 0 2px #090d16 !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@keyframes indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+.animate-indeterminate {
+  animation: indeterminate 1.5s infinite linear;
+}
+
+/* ToastContext and MegaMenu referenced these utility classes but nothing defined
+   them, so toasts snapped in and `transition-all` was inert. Same shape as the
+   rule above; the prefers-reduced-motion block already neutralises both. */
+@keyframes bounce-short {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(-2px) scale(1.01);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-bounce-short {
+  animation: bounce-short 0.28s ease-out;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.18s ease-out;
+}
+
+.bg-brand {
+  background-color: #0bff03;
+}
+
+.hover\:bg-brand-hover:hover {
+  background-color: #09e602;
+}
+
+.text-brand {
+  color: #0bff03;
+}
+
+.border-brand {
+  border-color: #0bff03;
+}
+
+.ring-brand {
+  --tw-ring-color: #0bff03;
+}

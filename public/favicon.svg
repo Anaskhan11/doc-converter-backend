@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" role="img" aria-label="DocConvert">
+  <rect width="32" height="32" rx="7" fill="#090d16"/>
+  <path d="M9 6h9l5 5v15a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Z" fill="none" stroke="#0bff03" stroke-width="2.4" stroke-linejoin="round"/>
+  <path d="M18 6v5h5" fill="none" stroke="#0bff03" stroke-width="2.4" stroke-linejoin="round"/>
+  <path d="M12 16h8M12 21h5" stroke="#0bff03" stroke-width="2.4" stroke-linecap="round"/>
+</svg>
